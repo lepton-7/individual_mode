@@ -222,7 +222,8 @@ static void timer_handler(nrf_timer_event_t event_type, void *p_context)
 static void pwm_handler(nrfx_pwm_evt_type_t event_type, void *p_context)
 {
     // NRFX_LOG_INFO("PWM handler");
-    nrfx_pwm_simple_playback(&pwm_instance, &seq[0], 1, NRFX_PWM_FLAG_START_VIA_TASK);
+    // nrfx_pwm_simple_playback(&pwm_instance, &seq[0], 1, NRFX_PWM_FLAG_START_VIA_TASK);
+    nrf_pwm_enable(pwm_instance.p_reg);
 }
 
 uint8_t gppi_channel_biphasic_started;
