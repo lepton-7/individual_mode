@@ -160,7 +160,7 @@ static uint16_t get_count_us(nrfx_pwm_config_t *conf, uint16_t us)
     }
 }
 
-#define INV(_COMP) (_COMP | 1 << 16)
+#define INV(_COMP) (_COMP | 1U << 16)
 
 static void set_biphasic_sequence(nrfx_pwm_config_t *conf, nrf_pwm_values_individual_t *arr, uint16_t pw)
 {
