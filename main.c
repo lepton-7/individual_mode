@@ -74,24 +74,6 @@
 #define PLAYBACK_COUNT 1UL
 
 /**
- * @brief Function for handling TIMER driver events.
- *
- * @param[in] event_type Timer event.
- * @param[in] p_context  General purpose parameter set during initialization of
- *                       the timer. This parameter can be used to pass
- *                       additional information to the handler function, for
- *                       example, the timer ID.
- */
-static void timer_handler(nrf_timer_event_t event_type, void *p_context)
-{
-    if (event_type == NRF_TIMER_EVENT_COMPARE0)
-    {
-        char *p_msg = p_context;
-        NRFX_LOG_INFO("Timer finished. Context passed to the handler: >%s<", p_msg);
-    }
-}
-
-/**
  * @brief Sequence default configuration in NRF_PWM_LOAD_GROUPED mode.
  *
  * This configuration sets up sequence with the following options:
@@ -109,9 +91,9 @@ static void timer_handler(nrf_timer_event_t event_type, void *p_context)
         .end_delay = 0}
 
 #define DEAD_TIME_US 2
-uint16_t pw_us = 50;
+uint16_t pw_us = 500;
 uint16_t ip_us = 40;
-uint16_t freq = 199;
+uint16_t freq = 200;
 
 static nrf_pwm_values_individual_t biphasic_vals[] =
     {
@@ -209,6 +191,26 @@ static void set_seq_countertop(nrfx_pwm_config_t *conf, uint16_t period_us)
     conf->top_value = get_count_us(conf, period_us);
 }
 
+static nrfx_pwm_t pwm_instance = NRFX_PWM_INSTANCE(PWM_INST_IDX);
+
+/**
+ * @brief Function for handling TIMER driver events.
+ *
+ * @param[in] event_type Timer event.
+ * @param[in] p_context  General purpose parameter set during initialization of
+ *                       the timer. This parameter can be used to pass
+ *                       additional information to the handler function, for
+ *                       example, the timer ID.
+ */
+static void timer_handler(nrf_timer_event_t event_type, void *p_context)
+{
+    if (event_type == NRF_TIMER_EVENT_COMPARE0)
+    {
+        char *p_msg = p_context;
+        // NRFX_LOG_INFO("Timer finished. Context passed to the handler: >%s<", p_msg);
+    }
+}
+
 /**
  * @brief Function for handling PWM driver events.
  *
@@ -219,11 +221,13 @@ static void set_seq_countertop(nrfx_pwm_config_t *conf, uint16_t period_us)
  */
 static void pwm_handler(nrfx_pwm_evt_type_t event_type, void *p_context)
 {
-    return;
+    // NRFX_LOG_INFO("PWM handler");
+    nrfx_pwm_simple_playback(&pwm_instance, &seq[0], 1, NRFX_PWM_FLAG_START_VIA_TASK);
 }
 
 uint8_t gppi_channel_biphasic_started;
 uint8_t gppi_channel_biphasic_trigger;
+uint8_t gppi_channel_seq_end;
 
 /**
  * @brief Function for application main entry.
@@ -250,38 +254,40 @@ int main(void)
 
     // Setup the timer
     nrfx_timer_t timer_inst = NRFX_TIMER_INSTANCE(TIMER_INST_IDX);
-    uint32_t base_frequency = 500 * 1000;
+    uint32_t base_frequency = 4e6;
     nrfx_timer_config_t tconfig = NRFX_TIMER_DEFAULT_CONFIG(base_frequency);
-    tconfig.bit_width = NRF_TIMER_BIT_WIDTH_16;
+    tconfig.bit_width = NRF_TIMER_BIT_WIDTH_24;
     tconfig.p_context = "Some context";
 
     status = nrfx_timer_init(&timer_inst, &tconfig, timer_handler);
     NRFX_ASSERT(status == NRFX_SUCCESS);
 
     nrfx_timer_clear(&timer_inst);
-    uint32_t desired_ticks = nrfx_timer_us_to_ticks(&timer_inst, 1e6 / freq);
+    uint32_t desired_ticks = base_frequency / (uint32_t)freq;
+    // uint32_t desired_ticks = nrfx_timer_us_to_ticks(&timer_inst, (1000000U / freq));
 
     /*
      * Setting the timer channel NRF_TIMER_CC_CHANNEL0 in the extended compare mode to stop the timer and
      * trigger an interrupt if internal counter register is equal to desired_ticks.
      */
     nrfx_timer_extended_compare(&timer_inst, NRF_TIMER_CC_CHANNEL0, desired_ticks,
-                                NRF_TIMER_SHORT_COMPARE0_STOP_MASK, false);
+                                NRF_TIMER_SHORT_COMPARE0_STOP_MASK, true);
     nrfx_timer_extended_compare(&timer_inst, NRF_TIMER_CC_CHANNEL1, desired_ticks,
-                                NRF_TIMER_SHORT_COMPARE1_CLEAR_MASK, false);
+                                NRF_TIMER_SHORT_COMPARE1_CLEAR_MASK, true);
 
     status = nrfx_gppi_channel_alloc(&gppi_channel_biphasic_started);
     NRFX_ASSERT(status == NRFX_SUCCESS);
     status = nrfx_gppi_channel_alloc(&gppi_channel_biphasic_trigger);
     NRFX_ASSERT(status == NRFX_SUCCESS);
+    status = nrfx_gppi_channel_alloc(&gppi_channel_seq_end);
+    NRFX_ASSERT(status == NRFX_SUCCESS);
 
     // Setup the PWM --------------------------------------------------------------------
-    nrfx_pwm_t pwm_instance = NRFX_PWM_INSTANCE(PWM_INST_IDX);
-    nrfx_pwm_config_t config = NRFX_PWM_DEFAULT_CONFIG(11, 12, 19, 20);
+    nrfx_pwm_config_t config = NRFX_PWM_DEFAULT_CONFIG(17, 18, 19, 20);
     config.pin_inverted[1] = true;
     config.pin_inverted[3] = true;
     config.load_mode = NRF_PWM_LOAD_INDIVIDUAL;
-    config.base_clock = NRF_PWM_CLK_4MHz;
+    config.base_clock = NRF_PWM_CLK_16MHz;
     config.count_mode = NRF_PWM_MODE_UP_AND_DOWN;
 
     set_seq_countertop(&config, pw_us + ip_us);
@@ -292,26 +298,37 @@ int main(void)
 
     // Setup PPI for this
 
-    /*
-     * Configure endpoints of the channel so that the input timer event is connected with the output
-     * pin OUT task. This means that each time the timer interrupt occurs, the LED pin will be toggled.
-     */
-    nrfx_gppi_channel_endpoints_setup(gppi_channel_biphasic_trigger,
-                                      nrfx_timer_compare_event_address_get(&timer_inst, NRF_TIMER_CC_CHANNEL0),
-                                      nrfx_pwm_task_address_get(&pwm_instance, NRF_PWM_TASK_SEQSTART0));
-    nrfx_gppi_channels_enable(BIT(gppi_channel_biphasic_trigger));
-
+    // Restart timer when the PWM has started the pulse
     nrfx_gppi_channel_endpoints_setup(gppi_channel_biphasic_started,
                                       nrfx_pwm_event_address_get(&pwm_instance, NRF_PWM_EVENT_SEQSTARTED0),
                                       nrfx_timer_task_address_get(&timer_inst, NRF_TIMER_TASK_START));
     nrfx_gppi_channels_enable(BIT(gppi_channel_biphasic_started));
 
+    // Stop the PWM peripheral at the end of SEQ[0]
+    nrfx_gppi_channel_endpoints_setup(gppi_channel_seq_end,
+                                      nrfx_pwm_event_address_get(&pwm_instance, NRF_PWM_EVENT_SEQEND0),
+                                      nrfx_pwm_task_address_get(&pwm_instance, NRF_PWM_TASK_STOP));
+    nrfx_gppi_channels_enable(BIT(gppi_channel_seq_end));
+
+    // Start PWM when timer runs out
+    nrfx_gppi_channel_endpoints_setup(gppi_channel_biphasic_trigger,
+                                      nrfx_timer_compare_event_address_get(&timer_inst, NRF_TIMER_CC_CHANNEL0),
+                                      nrfx_pwm_task_address_get(&pwm_instance, NRF_PWM_TASK_SEQSTART0));
+    nrfx_gppi_channels_enable(BIT(gppi_channel_biphasic_trigger));
+
     status = nrfx_pwm_init(&pwm_instance, &config, pwm_handler, &pwm_instance);
     NRFX_ASSERT(status == NRFX_SUCCESS);
 
-    nrfx_pwm_complex_playback(&pwm_instance, &seq[0], &seq[1], PLAYBACK_COUNT, NRFX_PWM_FLAG_START_VIA_TASK);
-    // nrfx_pwm_simple_playback(&pwm_instance, &seq[0], 1, NRFX_PWM_FLAG_START_VIA_TASK);
+    // nrfx_pwm_complex_playback(&pwm_instance, &seq[0], &seq[1], PLAYBACK_COUNT, NRFX_PWM_FLAG_START_VIA_TASK);
+    // nrfx_pwm_complex_playback(&pwm_instance, &seq[0], &seq[1], PLAYBACK_COUNT, NRFX_PWM_FLAG_START_VIA_TASK | NRFX_PWM_FLAG_STOP);
+    NRFX_LOG_INFO("Starting PWM and timer");
+    nrfx_pwm_simple_playback(&pwm_instance, &seq[0], 1, NRFX_PWM_FLAG_START_VIA_TASK);
     nrfx_timer_enable(&timer_inst);
+
+    k_msleep(1000);
+    NRFX_LOG_INFO("Starting timer again");
+    nrfx_timer_resume(&timer_inst);
+    NRFX_LOG_INFO("Is the pwm initialised? (%d)", nrfx_pwm_init_check(&pwm_instance));
 
     while (1)
     {
