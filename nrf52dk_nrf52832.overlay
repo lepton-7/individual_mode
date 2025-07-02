@@ -12,7 +12,7 @@
 // You can also visit the nRF DeviceTree extension documentation at https://docs.nordicsemi.com/bundle/nrf-connect-vscode/page/guides/ncs_configure_app.html#devicetree-support-in-the-extension
 
 &led1 {
-	gpios = <&gpio0 18 GPIO_ACTIVE_LOW>;
+	gpios = <&gpio0 18 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 };
 
 &led0 {
@@ -21,4 +21,8 @@
 
 &led2 {
 	gpios = <&gpio0 19 0>;
+};
+
+&led3 {
+	gpios = <&gpio0 20 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 };

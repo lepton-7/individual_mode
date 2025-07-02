@@ -160,7 +160,7 @@ static uint16_t get_count_us(nrfx_pwm_config_t *conf, uint16_t us)
     }
 }
 
-#define INV(_COMP) (_COMP | 1U << 16)
+#define INV(_COMP) (_COMP | 1U << 15)
 
 static void set_biphasic_sequence(nrfx_pwm_config_t *conf, nrf_pwm_values_individual_t *arr, uint16_t pw)
 {
@@ -201,7 +201,7 @@ static void pwm_handler(nrfx_pwm_evt_type_t event_type, void *p_context)
     if (m_curr_loop == NUM_OF_LOOPS)
     {
         NRFX_LOG_INFO("PWM finished");
-        nrfx_pwm_uninit(inst);
+        // nrfx_pwm_uninit(inst);
     }
 
     m_curr_loop++;
@@ -229,8 +229,8 @@ int main(void)
 
     nrfx_pwm_t pwm_instance = NRFX_PWM_INSTANCE(PWM_INST_IDX);
     nrfx_pwm_config_t config = NRFX_PWM_DEFAULT_CONFIG(17, 18, 19, 20);
-    // config.pin_inverted[1] = true;
-    // config.pin_inverted[3] = true;
+    config.pin_inverted[1] = true;
+    config.pin_inverted[3] = true;
     config.load_mode = NRF_PWM_LOAD_INDIVIDUAL;
     config.base_clock = NRF_PWM_CLK_4MHz;
     config.count_mode = NRF_PWM_MODE_UP_AND_DOWN;
@@ -244,7 +244,7 @@ int main(void)
     status = nrfx_pwm_init(&pwm_instance, &config, pwm_handler, &pwm_instance);
     NRFX_ASSERT(status == NRFX_SUCCESS);
 
-    nrfx_pwm_simple_playback(&pwm_instance, &seq[0], PLAYBACK_COUNT, NRFX_PWM_FLAG_LOOP);
+    nrfx_pwm_simple_playback(&pwm_instance, &seq[0], PLAYBACK_COUNT, NRFX_PWM_FLAG_STOP);
 
     while (1)
     {
