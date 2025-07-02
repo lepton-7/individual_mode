@@ -33,6 +33,8 @@
 
 #include <nrfx_example.h>
 #include <nrfx_pwm.h>
+#include <nrfx_timer.h>
+#include <helpers/nrfx_gppi.h>
 
 #define NRFX_LOG_MODULE EXAMPLE
 #define NRFX_EXAMPLE_CONFIG_LOG_ENABLED 1
@@ -53,6 +55,9 @@
  *          called.
  */
 
+/** @brief Symbol specifying timer instance to be used. */
+#define TIMER_INST_IDX 0
+
 /** @brief Symbol specifying PWM instance to be used. */
 #define PWM_INST_IDX 0
 
@@ -63,16 +68,28 @@
 #define VALUE_REPEATS 0UL
 
 /**
- * @brief Symbol specifying number of loops to be performed (one loop means to complete
- *        SEQ0 and SEQ1 @ref PLAYBACK_COUNT times).
- */
-#define NUM_OF_LOOPS 6UL
-
-/**
  * @brief Symbol specifying number of playbacks to be performed. In this example couple of
  *        playbacks might be considered as one loop.
  */
 #define PLAYBACK_COUNT 1UL
+
+/**
+ * @brief Function for handling TIMER driver events.
+ *
+ * @param[in] event_type Timer event.
+ * @param[in] p_context  General purpose parameter set during initialization of
+ *                       the timer. This parameter can be used to pass
+ *                       additional information to the handler function, for
+ *                       example, the timer ID.
+ */
+static void timer_handler(nrf_timer_event_t event_type, void *p_context)
+{
+    if (event_type == NRF_TIMER_EVENT_COMPARE0)
+    {
+        char *p_msg = p_context;
+        NRFX_LOG_INFO("Timer finished. Context passed to the handler: >%s<", p_msg);
+    }
+}
 
 /**
  * @brief Sequence default configuration in NRF_PWM_LOAD_GROUPED mode.
@@ -94,7 +111,7 @@
 #define DEAD_TIME_US 2
 uint16_t pw_us = 50;
 uint16_t ip_us = 40;
-uint16_t freq = 50;
+uint16_t freq = 199;
 
 static nrf_pwm_values_individual_t biphasic_vals[] =
     {
@@ -103,16 +120,25 @@ static nrf_pwm_values_individual_t biphasic_vals[] =
         {0, 0, 0, 0},
 };
 
+static nrf_pwm_values_individual_t empty_seq_vals[] =
+    {
+        {0, 0, 0, 0},
+};
+
 /** @brief Array containing sequences to be used in this example. */
 static nrf_pwm_sequence_t seq[] =
     {
         SEQ_CONFIG(biphasic_vals),
+        SEQ_CONFIG(empty_seq_vals),
 };
 
 static void update_seqs(nrf_pwm_values_individual_t *arr, int arr_len)
 {
     seq[0] = (nrf_pwm_sequence_t)SEQ_CONFIG(arr);
     seq[0].length = 4 * arr_len;
+
+    seq[1] = (nrf_pwm_sequence_t)SEQ_CONFIG(empty_seq_vals);
+    seq[1].length = 4 * 1;
 }
 
 static uint16_t get_count_us(nrfx_pwm_config_t *conf, uint16_t us)
@@ -171,13 +197,11 @@ static void set_biphasic_sequence(nrfx_pwm_config_t *conf, nrf_pwm_values_indivi
     NRFX_LOG_INFO("On time COMP with deadband: %d", comp_on_dead);
 
     uint16_t max = conf->top_value;
-    // arr[0] = (nrf_pwm_values_individual_t){comp_on, comp_on_dead, max, max};
-    // arr[1] = (nrf_pwm_values_individual_t){max, max, comp_on, comp_on_dead};
-    // arr[2] = (nrf_pwm_values_individual_t){max, max, max, max};
-
     arr[0] = (nrf_pwm_values_individual_t){comp_on, INV(comp_on_dead), max, INV(max)};
     arr[1] = (nrf_pwm_values_individual_t){max, INV(max), comp_on, INV(comp_on_dead)};
     arr[2] = (nrf_pwm_values_individual_t){max, INV(max), max, INV(max)};
+
+    empty_seq_vals[0] = (nrf_pwm_values_individual_t){max, INV(max), max, INV(max)};
 }
 
 static void set_seq_countertop(nrfx_pwm_config_t *conf, uint16_t period_us)
@@ -195,17 +219,11 @@ static void set_seq_countertop(nrfx_pwm_config_t *conf, uint16_t period_us)
  */
 static void pwm_handler(nrfx_pwm_evt_type_t event_type, void *p_context)
 {
-    nrfx_pwm_t *inst = p_context;
-    static uint32_t m_curr_loop = 1;
-
-    if (m_curr_loop == NUM_OF_LOOPS)
-    {
-        NRFX_LOG_INFO("PWM finished");
-        // nrfx_pwm_uninit(inst);
-    }
-
-    m_curr_loop++;
+    return;
 }
+
+uint8_t gppi_channel_biphasic_started;
+uint8_t gppi_channel_biphasic_trigger;
 
 /**
  * @brief Function for application main entry.
@@ -220,6 +238,9 @@ int main(void)
 #if defined(__ZEPHYR__)
     IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_PWM_INST_GET(PWM_INST_IDX)), IRQ_PRIO_LOWEST,
                 NRFX_PWM_INST_HANDLER_GET(PWM_INST_IDX), 0, 0);
+
+    IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_TIMER_INST_GET(TIMER_INST_IDX)), IRQ_PRIO_LOWEST,
+                NRFX_TIMER_INST_HANDLER_GET(TIMER_INST_IDX), 0, 0);
 #endif
 
     NRFX_EXAMPLE_LOG_INIT();
@@ -227,8 +248,36 @@ int main(void)
     NRFX_LOG_INFO("Starting nrfx_pwm example for sequences loaded in grouped mode.");
     NRFX_EXAMPLE_LOG_PROCESS();
 
+    // Setup the timer
+    nrfx_timer_t timer_inst = NRFX_TIMER_INSTANCE(TIMER_INST_IDX);
+    uint32_t base_frequency = 500 * 1000;
+    nrfx_timer_config_t tconfig = NRFX_TIMER_DEFAULT_CONFIG(base_frequency);
+    tconfig.bit_width = NRF_TIMER_BIT_WIDTH_16;
+    tconfig.p_context = "Some context";
+
+    status = nrfx_timer_init(&timer_inst, &tconfig, timer_handler);
+    NRFX_ASSERT(status == NRFX_SUCCESS);
+
+    nrfx_timer_clear(&timer_inst);
+    uint32_t desired_ticks = nrfx_timer_us_to_ticks(&timer_inst, 1e6 / freq);
+
+    /*
+     * Setting the timer channel NRF_TIMER_CC_CHANNEL0 in the extended compare mode to stop the timer and
+     * trigger an interrupt if internal counter register is equal to desired_ticks.
+     */
+    nrfx_timer_extended_compare(&timer_inst, NRF_TIMER_CC_CHANNEL0, desired_ticks,
+                                NRF_TIMER_SHORT_COMPARE0_STOP_MASK, false);
+    nrfx_timer_extended_compare(&timer_inst, NRF_TIMER_CC_CHANNEL1, desired_ticks,
+                                NRF_TIMER_SHORT_COMPARE1_CLEAR_MASK, false);
+
+    status = nrfx_gppi_channel_alloc(&gppi_channel_biphasic_started);
+    NRFX_ASSERT(status == NRFX_SUCCESS);
+    status = nrfx_gppi_channel_alloc(&gppi_channel_biphasic_trigger);
+    NRFX_ASSERT(status == NRFX_SUCCESS);
+
+    // Setup the PWM --------------------------------------------------------------------
     nrfx_pwm_t pwm_instance = NRFX_PWM_INSTANCE(PWM_INST_IDX);
-    nrfx_pwm_config_t config = NRFX_PWM_DEFAULT_CONFIG(17, 18, 19, 20);
+    nrfx_pwm_config_t config = NRFX_PWM_DEFAULT_CONFIG(11, 12, 19, 20);
     config.pin_inverted[1] = true;
     config.pin_inverted[3] = true;
     config.load_mode = NRF_PWM_LOAD_INDIVIDUAL;
@@ -241,10 +290,28 @@ int main(void)
 
     NRFX_LOG_INFO("CTOP set to %d", config.top_value);
 
+    // Setup PPI for this
+
+    /*
+     * Configure endpoints of the channel so that the input timer event is connected with the output
+     * pin OUT task. This means that each time the timer interrupt occurs, the LED pin will be toggled.
+     */
+    nrfx_gppi_channel_endpoints_setup(gppi_channel_biphasic_trigger,
+                                      nrfx_timer_compare_event_address_get(&timer_inst, NRF_TIMER_CC_CHANNEL0),
+                                      nrfx_pwm_task_address_get(&pwm_instance, NRF_PWM_TASK_SEQSTART0));
+    nrfx_gppi_channels_enable(BIT(gppi_channel_biphasic_trigger));
+
+    nrfx_gppi_channel_endpoints_setup(gppi_channel_biphasic_started,
+                                      nrfx_pwm_event_address_get(&pwm_instance, NRF_PWM_EVENT_SEQSTARTED0),
+                                      nrfx_timer_task_address_get(&timer_inst, NRF_TIMER_TASK_START));
+    nrfx_gppi_channels_enable(BIT(gppi_channel_biphasic_started));
+
     status = nrfx_pwm_init(&pwm_instance, &config, pwm_handler, &pwm_instance);
     NRFX_ASSERT(status == NRFX_SUCCESS);
 
-    nrfx_pwm_simple_playback(&pwm_instance, &seq[0], PLAYBACK_COUNT, NRFX_PWM_FLAG_STOP);
+    nrfx_pwm_complex_playback(&pwm_instance, &seq[0], &seq[1], PLAYBACK_COUNT, NRFX_PWM_FLAG_START_VIA_TASK);
+    // nrfx_pwm_simple_playback(&pwm_instance, &seq[0], 1, NRFX_PWM_FLAG_START_VIA_TASK);
+    nrfx_timer_enable(&timer_inst);
 
     while (1)
     {
